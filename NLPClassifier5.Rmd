@@ -1,0 +1,200 @@
+---
+title: "NLPClassifier4"
+author: "Lumpeenlampi"
+date: "18 elokuuta 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tm)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(caret)
+library(kernlab)
+library(data.table)
+library(RWeka)
+```
+
+
+# Classifier
+
+```{r}
+
+inputdir <- "./tdmall3/en_US/"
+
+readTdm <- function(dir, filenm)
+{
+  fnm <- paste(dir, filenm, sep="")
+  tdm <- fread(fnm)
+  return(tdm)
+}
+
+tokenize <- function(t) {
+  return(Boost_tokenizer(t))
+}
+
+tdt2all <- readTdm(inputdir, "en_US.all_tdm_scores_redalt_1.csv")
+tdt3all <- readTdm(inputdir, "en_US.all_tdm_scores_redalt_2.csv")
+tdt4all <- readTdm(inputdir, "en_US.all_tdm_scores_redalt_3.csv")
+tdt5all <- readTdm(inputdir, "en_US.all_tdm_scores_redalt_4.csv")
+
+setkey(tdt2all, word1)
+setkey(tdt3all, word2, word1)
+setkey(tdt4all, word3, word2, word1)
+setkey(tdt5all, word4, word3, word2, word1)
+
+predictwordn <- function(wordstr, n=5)
+{
+  nextw <- ""
+  ans <- data.table()
+  words <- tokenize(removePunctuation(tolower(wordstr)))
+  lenwords <- length(words)
+  matchl <- data.table()
+  if(lenwords >= 4)
+  {
+    if(n>=5)
+      matchl <- tdt5all[.(words[lenwords-3], words[lenwords-2], words[lenwords-1], words[lenwords])]
+    if(nrow(matchl)>0)
+    {
+      matchl <- cbind(matchl, match = rep(4, nrow(matchl)))
+      matchl <- matchl[,term:=paste(word4, word3, word2, word1, nextword)]
+      matchl <- matchl[, .(nextword, count, score, match, term)]
+      ans <- matchl[!is.na(matchl$nextword),]
+#      return(c(matchl[1, "nextword"], "4", matchl[1, "freq"]))
+    }
+  }
+  if(lenwords >= 3)
+  {
+    if(n>=4)
+      matchl <- tdt4all[.(words[lenwords-2], words[lenwords-1], words[lenwords])]
+    if(nrow(matchl)>0)
+    {
+      matchl <- cbind(matchl, match = rep(3, nrow(matchl)))
+      matchl <- matchl[,term:=paste(word3, word2, word1, nextword)]
+      matchl <- matchl[, .(nextword, count, score, match, term)]
+      if(nrow(matchl) > 0)
+        for(i in 1:nrow(matchl))
+          if(!is.na(matchl[i, "nextword"]) && ((nrow(ans)==0) || !any(ans$nextword == as.character(matchl[i, "nextword"]))))
+            ans <- rbind(ans, matchl[i, ])
+#      return(c(matchl[1, "nextword"], "3", matchl[1, "freq"]))
+    }
+  }
+  if(lenwords >= 2)
+  {
+    if(n>=3)
+      matchl <- tdt3all[.(words[lenwords-1], words[lenwords])]
+    if(nrow(matchl)>0)
+    {
+      matchl <- cbind(matchl, match = rep(2, nrow(matchl)))
+      matchl <- matchl[,term:=paste(word2, word1, nextword)]
+      matchl <- matchl[, .(nextword, count, score, match, term)]
+      if(nrow(matchl) > 0)
+        for(i in 1:nrow(matchl))
+          if(!is.na(matchl[i, "nextword"]) && ((nrow(ans)==0) || !any(ans$nextword == as.character(matchl[i, "nextword"]))))
+            ans <- rbind(ans, matchl[i, ])
+#      return(c(matchl[1, "nextword"], "2", matchl[1, "freq"]))
+    }
+  }
+  matchl <- tdt2all[.(words[lenwords])]
+  if(nrow(matchl)>0)
+  {
+    matchl <- cbind(matchl, match = rep(1, nrow(matchl)))
+    matchl <- matchl[,term:=paste(word1, nextword)]
+    matchl <- matchl[, .(nextword, count, score, match, term)]
+    if(nrow(matchl) > 0)
+      for(i in 1:nrow(matchl))
+        if(!is.na(matchl[i, "nextword"]) && ((nrow(ans)==0) || !any(ans$nextword == as.character(matchl[i, "nextword"]))))
+          ans <- rbind(ans, matchl[i, ])
+#    return(c(matchl[1, "nextword"], "1", matchl[1, "freq"]))
+  }
+  if(nrow(ans)>0)
+    ans <- data.table(arrange(ans, desc(score)))
+  return(ans)
+}
+
+predictword <- function(x) predictwordn(x, 5)
+
+myAnsPrint <- function(ans)
+{
+  len3 = 10
+  min3 = 2
+  len2 = 10
+  min2 = 2
+  len1 = 10
+  min1 = 2
+  ans3 <- ans[match==3]
+  ans3 <- ans3[count >= min3]
+  ans2 <- ans[match==2]
+  ans2 <- ans2[count >= min2]
+  ans1 <- ans[match==1]
+  ans1 <- ans1[count >= min1]
+  if(nrow(ans3) < len3) len3 = nrow(ans3)
+  if(nrow(ans2) < len2) len2 = nrow(ans2)
+  if(nrow(ans1) < len1) len1 = nrow(ans1)
+  print(ans3[1:len3,])
+  print(ans2[1:len2,])
+  print(ans1[1:len1,])
+}
+
+
+
+
+
+``` 
+
+## Quiz
+
+```{r}
+
+predictword <- function(x) predictword5(x) # Wrapper
+myAnsPrint <- function(x) print(x)
+
+ans <- predictword("The guy in front of me just bought a pound of bacon, a bouquet, and a case of")
+myAnsPrint(ans)
+ans <- predictword("You're the reason why I smile everyday. Can you follow me please? It would mean the")
+myAnsPrint(ans)
+ans <- predictword("Hey sunshine, can you follow me and make me the")
+myAnsPrint(ans)
+ans <- predictword("Very early observations on the Bills game: Offense still struggling but the")
+myAnsPrint(ans)
+ans <- predictword("Go on a romantic date at the")
+myAnsPrint(ans)
+ans <- predictword("Well I'm pretty sure my granny has some old bagpipes in her garage I'll dust them off and be on my")
+myAnsPrint(ans)
+ans <- predictword("Ohhhhh #PointBreak is on tomorrow. Love that film and haven't seen it in quite some")
+myAnsPrint(ans)
+ans <- predictword("After the ice bucket challenge Louis will push his long wet hair out of his eyes with his little")
+myAnsPrint(ans)
+ans <- predictword("Be grateful for the good times and keep the faith during the")
+myAnsPrint(ans)
+ans <- predictword("If this isn't the cutest thing you've ever seen, then you must be")
+myAnsPrint(ans)
+
+#Quiz2
+
+# ' seems to be €™
+
+ans <- predictword("When you breathe, I want to be the air for you. I'll be there for you, I'd live and I'd")
+myAnsPrint(ans) # guess die (ok)
+ans <- predictword("Guy at my table's wife got up to go to the bathroom and I asked about dessert and he started telling me about his")
+myAnsPrint(ans) # Financial found in 1 (count=20) (false) guess marital
+ans <- predictword("I'd give anything to see arctic monkeys this")
+myAnsPrint(ans) # Morning found in 1 (count=11712) (false) guess decade
+ans <- predictword("Talking to your mom has the same effect as a hug and helps reduce your")
+myAnsPrint(ans) # happiness: 39 (1), stress: 3(1) (false) try stress
+ans <- predictword("When you were in Holland you were like 1 inch away from me but you hadn't time to take a")
+myAnsPrint(ans) # look: 208 (3), picture: 169 (3) (false) try picture
+ans <- predictword("I'd just like all of these questions answered, a presentation of evidence, and a jury to settle the") 
+myAnsPrint(ans) # case: 6(3) (false) guess matter
+ans <- predictword("I can't deal with unsymetrical things. I can't even hold an uneven number of bags of groceries in each")
+myAnsPrint(ans) # hand 4(2)
+ans <- predictword("Every inch of you is perfect from the bottom to the")
+myAnsPrint(ans) # top 2(2)
+ans <- predictword("I’m thankful my childhood was filled with imagination and bruises from playing")
+myAnsPrint(ans) # guess outside
+ans <- predictword("I like how the same people are in almost all of Adam Sandler's")
+myAnsPrint(ans) # guess movies
+```

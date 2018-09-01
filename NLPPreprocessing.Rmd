@@ -1,0 +1,80 @@
+---
+title: "NLP Preprocessing"
+author: "Lumpeenlampi"
+date: "4 July 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tm)
+library(stringr)
+library(tidyverse)
+```
+
+## Overview
+
+The natural language processing (NLP) tasks for the capstone project on word prediction requires the preprocessing of the documents in order to efficiently generate the required models for the prediction algorithm. In cluded in this file are algorithms for:
+1) Splitting the file to smaller files to avoid problems with memory and computational limits
+2) Filtering undesired characters from the files (non-ASCII characters and a few extremely disturbing EOF characters)
+
+## File splitting and character conversion
+
+```{r}
+perc <- 10
+set.seed(1234)
+
+in_path <- "./Coursera-SwiftKey/final/en_US/" # The path where the input files are found
+out_path <- "./Coursera-SwiftKey/split/en_US/" # The path for storage of the output
+
+# The rwFileLines function takes the in and output paths, the file for input containing
+# text arranged in lines, and a chunk-size, which is the number of lines to be written 
+# to one output file. The function will generate the output filenames from the input
+# filename by adding an ascending number to it. rwFileLines reads files in UTF-8 format,
+# converts the file to basic ASCII and removes any encountered EOF (\x1A) characters.
+
+rwFileLines <- function(in_path, out_path, filename, chunk_size) {
+  fn <- paste(in_path, filename, sep="")
+  print(fn)
+  con <- file(fn, "rb", encoding = "UTF-8") 
+  content_raw <- read_lines(con) # Read everything at once
+#  content <- str_replace_all(content_raw,"[^[:graph:]]", " ") #Remove weird characters
+  content_raw <- sub("\x1A", "", content_raw) # Crude way to get rid of problematic EOF's
+  content <- iconv(content_raw, "UTF-8", "ASCII", sub="") #Quite restrictive - won't work for scandi
+  
+  strfn <- substr(filename, 1, nchar(filename)-4) # Strip the .txt extension
+  idx <- 1
+  lineIdx <- 1
+  while(lineIdx < length(content))
+  {
+    print(as.character(lineIdx))
+    cknm <- paste(out_path, strfn, "_", str_pad(idx, 6, pad="0"), ".txt", sep="")
+    con2 <- file(as.character(cknm), "w")
+    if(lineIdx + chunk_size <= length(content))
+      write_lines(content[lineIdx:(lineIdx+chunk_size)], con2)
+    else
+      write_lines(content[lineIdx:(length(content))], con2)
+    close(con2)
+    idx <- idx+1
+    lineIdx <- lineIdx + chunk_size
+  }    
+
+  close(con) ## It's important to close the connection when you are done
+  
+  return(idx)
+}
+
+# Calling the rwFileLines function with suitable parameters. For blogs and news and 
+# aiming for a full size TDM (min count = 1), suitable
+# chunk sizes are 10000, while for twitter 30000 is used.
+# For conversion without splitting use Inf.
+
+rwFileLines(in_path, out_path, "en_US.blogs.txt", 40000)
+rwFileLines(in_path, out_path, "en_US.news.txt", 40000)
+rwFileLines(in_path, out_path, "en_US.twitter.txt", 100000)
+
+
+```
+
+
+

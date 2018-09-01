@@ -1,0 +1,193 @@
+---
+title: "NLPPerformance"
+author: "Lumpeenlampi"
+date: "30 elokuuta 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(caret)
+```
+
+## NLP Performance estimation
+
+This file provides means for the performance estimation of the classifier(s). There are a number of parameters that can be optimized, but this needs testing. A test set (chunk 10 in the splitted files for each of the blogs, news and twitter files) has been left out of the training set, so those chunks can be used for evaluation. Evaluation will take a random sentence (or sequence of 5 words, as that is the maximum used for prediction) and feeds it into the classifier. The classifier provides a list of candidates in a descending order of likelihood (or score). The score and position in the list is registered for each classification attempt. Then the results of the classification are compared to the expected outcome and a summary of N classifications is made to provde a final test score. The timing of the classifier is also measured.
+
+```{r}
+inputdir <- "./Coursera-SwiftKey/split/en_US/"
+
+testblogs <- read_lines(paste(inputdir, "en_US.blogs_000010.txt", sep="")) 
+testnews <- read_lines(paste(inputdir, "en_US.news_000010.txt", sep="")) 
+testtwitter <- read_lines(paste(inputdir, "en_US.twitter_000010.txt", sep="")) 
+
+testblogs <- tolower(testblogs)
+testblogs <- removePunctuation(testblogs)
+testblogs <- removeNumbers(testblogs)
+
+testnews <- tolower(testnews)
+testnews <- removePunctuation(testnews)
+testnews <- removeNumbers(testnews)
+
+testtwitter <- tolower(testtwitter)
+testtwitter <- removePunctuation(testtwitter)
+testtwitter <- removeNumbers(testtwitter)
+
+
+
+getRandomText <- function(testtxt, len=5)
+{
+  nlines <- length(testtxt) # Note, not sure if the structure is still in lines
+  gotText = FALSE
+  while(!gotText)
+  {
+    pickline <- round(runif(1, min=1, max=nlines))
+    linewords <- words(testtxt[pickline])
+    nwords <- length(linewords)
+    if(nwords>=len)
+    {
+      pickword <- round(runif(1, min=1, max=nwords-len+1))
+      gotText = TRUE
+    }
+  }
+  return(paste(linewords[pickword:(pickword+len-1)], collapse=" "))
+}
+
+makeTestVector <- function(testtxt, n, len=5)
+{
+  tvec <- data.table()
+  for(i in 1:n)
+  {
+    randomText <- getRandomText(testtxt, len)
+    randomWords <- words(randomText)
+    tvec <- rbind(tvec, data.table(input=paste(randomWords[1:(len-1)], collapse=" "), output=randomWords[len]))
+  }
+  return(tvec)
+}
+
+testClassifier <- function(classifier, testvec)
+{
+  testresult <- data.table()
+  cTime <- 0
+  for(i in 1:nrow(testvec))
+  {
+    #cTime <- system.time(
+    res <- classifier(testvec[i, "input"])  #)
+    if(nrow(res)>0)
+      matchidx <- match(testvec[i, "output"], unlist(res[,"nextword"]), nomatch=0)
+    else
+      matchidx <- 0
+    if(matchidx>0)
+      testresult <- rbind(testresult, data.table(input=as.character(testvec[i, "input"]),                                    output=as.character(testvec[i, "output"]), 
+           topword=as.character(res[1, "nextword"]), 
+           topscore=as.numeric(res[1, "score"]), 
+           topngram=as.numeric(res[1, "match"]+1), 
+           matchpos=as.numeric(matchidx), 
+           matchscore=as.numeric(res[matchidx, "score"]), 
+           matchngram=as.numeric(res[matchidx, "match"]+1) #, 
+ #          time=cTime[1]
+ ))
+    else
+    {
+      if(nrow(res)>0)
+        testresult <- rbind(testresult, 
+data.table(input=as.character(testvec[i, "input"]), 
+           output=as.character(testvec[i, "output"]), 
+           topword=as.character(res[1, "nextword"]), 
+           topscore=as.numeric(res[1, "score"]), 
+           topngram=as.numeric(res[1, "match"]+1), 
+           matchpos=NA, 
+           matchscore=NA, 
+           matchngram=NA #, 
+ #          time=cTime[1]
+        ))
+      else
+        testresult <- rbind(testresult, 
+data.table(input=as.character(testvec[i, "input"]), 
+           output=as.character(testvec[i, "output"]), 
+           topword=NA, 
+           topscore=NA, 
+           topngram=NA, 
+           matchpos=NA, 
+           matchscore=NA, 
+           matchngram=NA #, 
+ #          time=cTime[1]
+        ))
+   
+    }
+  }
+  return(testresult)
+}
+
+```
+
+
+## Classifier testing
+
+```{r}
+
+set.seed(1234)
+
+ntest <- 1000
+
+nblogs <- ntest
+nnews <- ntest
+ntwitter <- ntest
+
+ngrams <- 2
+
+predictword <- function(x) predictwordn(x, ngrams)
+
+blogstime <- system.time(blogstest <- testClassifier(predictword, makeTestVector(testblogs, nblogs)))
+
+newstime <- system.time(newstest <- testClassifier(predictword, makeTestVector(testnews, nnews)))
+
+twittertime <- system.time(twittertest <- testClassifier(predictword, makeTestVector(testtwitter, ntwitter)))
+
+alltest <- rbind(cbind(blogstest, test = rep("blogs", nblogs)), 
+                 cbind(newstest, test= rep("news", nnews)),
+                 cbind(twittertest, test=rep("twitter", ntwitter)))
+
+#blogscm <- confusionMatrix(blogstest$topword, blogstest$output)
+#newscm <- confusionMatrix(newstest$topword, newstest$output)
+#twittercm <- confusionMatrix(twittertest$topword, twittertest$output)
+#allcm <- confusionMatrix(alltest$topword, alltest$output)
+
+accblogs <- sum(blogstest$topword == blogstest$output, na.rm=TRUE)/nblogs
+accnews <- sum(newstest$topword == newstest$output, na.rm=TRUE)/nnews
+acctwitter <- sum(twittertest$topword == twittertest$output, na.rm=TRUE)/ntwitter
+
+accall <- sum(alltest$topword == alltest$output, na.rm=TRUE)/(nblogs+nnews+ntwitter)
+
+perfInd <- unlist(lapply(alltest[,c("topscore", "topngram", "matchpos", "matchscore", "matchngram" #, "time"
+                                    )], mean, na.rm=TRUE))
+
+perfInd <- append(perfInd, c(blogacc = accblogs, newsacc = accnews, twitteracc = acctwitter, totalacc = accall))
+
+perfInd <- append(perfInd, c(blogstime = as.numeric(blogstime[1]/nblogs), 
+                             newstime = as.numeric(newstime[1]/nnews),
+                             twittertime = as.numeric(twittertime[1]/ntwitter),
+                             alltime = as.numeric((blogstime[1]+newstime[1]+twittertime[1])/(nblogs + nnews + ntwitter))))
+
+# This line contains parameters of the data set - edit manually!
+
+perfInd <- append(c(filesize=288.8, n=2, alt=3, minscore=0.01, ngrams=ngrams, rep=ntest), perfInd)
+
+perfInd <- append(perfInd, c(topthreematch=round(sum(alltest$matchpos<=3, na.rm=TRUE)/(nblogs+nnews+ntwitter), digits=3),
+                             toptenmatch=round(sum(alltest$matchpos<=10, na.rm=TRUE)/(nblogs+nnews+ntwitter), digits=3)))
+
+perfdt <- transpose(data.table(round(as.numeric(perfInd), digits=3)))
+
+colnames(perfdt) <- names(perfInd)
+perfdt <- cbind(perfdt, id="score.01+alt")
+log <- fread("testlog.csv")
+log <- rbind(log, data.table(perfdt))
+fwrite(log, "testlog.csv")
+
+perfInd
+blogstime
+newstime
+twittertime
+```
+

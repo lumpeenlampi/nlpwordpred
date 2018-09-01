@@ -1,0 +1,405 @@
+---
+title: "NLP N-Gram Analysis"
+author: "Lumpeenlampi"
+date: "11 August 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tm)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(caret)
+library(kernlab)
+library(data.table)
+library(RWeka)
+```
+
+## Overview
+
+This file contains the functions to create the Term Document matrices (TDM's) for the N-grams needed for building the prediction model. It reads a set of input files, preprocesses the files by converting it to lower-case, removing punctuation and removing numbers, generates N-gram TDM's for the requested N-grams,  and writes the TDM's to temporaty CSV files (due to memory and computational limits). Subsequently TDM's are read in and combined to form the TDM's of the set. 
+
+Finally, the TDM's are purged and prepared for use in the model by removing entries with low counts, and calculating probabilities (or scores) for each of the N-Grams.
+
+
+## N-gram analysis functions
+
+The following section includes functions used for generating and writing the TDM's for the N-grams from the input files
+
+```{r}
+
+# Define tokenizers for 2-, 3- and 4-grams
+
+BigramTokenizer <- function(x)
+  unlist(lapply(ngrams(words(x), 2), paste, collapse = " "), use.names = FALSE)
+TrigramTokenizer <- function(x)
+  unlist(lapply(ngrams(words(x), 3), paste, collapse = " "), use.names = FALSE)
+QuadgramTokenizer <- function(x)
+  unlist(lapply(ngrams(words(x), 4), paste, collapse = " "), use.names = FALSE)
+
+# RWeka tokenizers 
+
+RWBigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 2, max = 2))
+RWTrigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 3, max = 3))
+RWQuadgramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 4, max = 4))
+
+# Term splitting
+mywords <- function(x, n) words(x)[n]
+
+splitTerm <- function(tdm, n)
+{
+  td <- tdm 
+  nms <- c("term", "count")
+  for(i in 1:n)
+  {
+    td <- cbind(td, sapply(tdm[, term], mywords, i))
+    if(n-i >0)
+      nms <- append(nms, paste("word", as.character(n-i), sep=""))
+    else
+      nms <- append(nms, "nextword")
+  }
+  colnames(td) <- nms
+  return(td[,2:ncol(td)]) # Remove original term column
+}
+
+# Function for generating TDM for a given N-gram
+# The function takes a Document, the n of the N-gram to make the TDM for, and the 
+# minimum number of terms to be included in the TDM
+# It returns the TDM as a data table
+
+makeTDMforNgram <- function(doc, n, min_terms=1)
+{
+  if(n==1)
+    myTokenizer <- function(x) WordTokenizer(x)
+  else
+    myTokenizer <- function(x) NGramTokenizer(x, Weka_control(min=n, max=n))
+  tdm <- as.matrix(TermDocumentMatrix(doc, control=list(tokenize=myTokenizer, bounds=list(local=c(min_terms, Inf)), wordLengths = c(1, Inf))))
+  tdm <- data.table(term=rownames(tdm), tdm)
+  colnames(tdm) <- c("term", "count")
+  tdm <- splitTerm(tdm, n)
+}
+
+# Function for looping through documents and creating given N-grams
+# The documents are contained in the corpus docs, and the n-grams to 
+# generate are denoted in a list. The TDM's are stored to files with
+# names encoding the source and the n of the N-gram in the given outdir
+
+makeTDMs <- function(docs, outdir, n_list = c(1, 2, 3, 4), min_terms=1)
+{
+  for(d in docs$content) # Loop through all documents
+  {
+    seldocs <- tm_filter(docs, function(x) meta(x)[["id"]] == meta(d)[["id"]])
+    print(meta(d)[["id"]])
+    for(i in n_list) # Loop though n's for the N-grams
+    {
+      # Extract n-grams into TermDocumentMatrix and write to file
+      tdm <- makeTDMforNgram(seldocs, i, min_terms)
+      fwrite(tdm, paste(outdir, substr(meta(d)[["id"]], 1, nchar(meta(d)[["id"]])-4), "_tdm_", as.character(i-1), ".csv", sep=""))
+    }
+  }
+}
+
+
+
+```
+
+## Generating TDMs for the N-Grams for separate files
+
+```{r cache = TRUE}
+
+inputdir <- "./Coursera-SwiftKey/split/en_US"    # Input directory with text files
+outdir <- "./tdm3/en_US/" # Output to write the files to
+
+# Reading in the documents
+
+docs <- VCorpus(DirSource(inputdir, encoding="UTF-8"))
+
+# Defining own removePunctuation function to keep word contractions
+myRemovePunctuation <- function(x) removePunctuation(x, preserve_intra_word_contractions = TRUE)
+
+# Basic cleaning (same as with original documents)
+docs <- tm_map(docs, content_transformer(tolower))
+docs <- tm_map(docs, content_transformer(removePunctuation))
+docs <- tm_map(docs, content_transformer(removeNumbers))
+
+# Looping through documents and writing N-grams
+
+makeTDMs(docs, outdir, n_list = c(1, 2, 3, 4, 5), min_terms=1)
+
+
+```
+
+
+##reading files and combining TDM's
+
+```{r}
+
+maxtdtsize <- 20000000 # Maximum size of combined tdt, after which a merge will take place
+
+#NOTE: Updated to remove term column (assumes row name and term columns in original files)
+
+# mergeTdms reads the TDMs in the given fileList. n is the order of N-Gram for which the
+# merging is done (NOTE: The file name of the N-Gram is coded with n-1!)
+
+mergeTdms <- function(indir, fileList, n)
+{
+  tdt <- data.table()
+  is_first = TRUE
+  just_merged = FALSE
+  for(f in fileList)
+  {
+    print(f)
+    dt <- fread(paste(indir, f, sep="")) # Read the TDM from file
+    if(any(grepl("term", colnames(dt))))
+      dt <- dt[,3:ncol(dt)] # Get rid of row names and term columns (if both are there, i.e. old version)
+    tdt <- rbind(tdt, dt)
+    rm(dt) # Free up space
+#    print(nrow(tdt))
+    just_merged = FALSE
+    if((nrow(tdt) > maxtdtsize) & !is_first)  # Do a merge when the combined tdt's start to be too big
+    { # The if-then's from the next section my be done more efficiently?
+      if(n == 0)
+        tdt <- tdt[,.(count=sum(count)), by=.(nextword)]
+      else if(n == 1)
+        tdt <- tdt[,.(count=sum(count)), by=.(word1, nextword)]
+      else if(n == 2)
+        tdt <- tdt[,.(count=sum(count)), by=.(word2, word1, nextword)]
+      else if(n == 3)
+        tdt <- tdt[,.(count=sum(count)), by=.(word3, word2, word1, nextword)]
+      else if(n == 4)
+        tdt <- tdt[,.(count=sum(count)), by=.(word4, word3, word2, word1, nextword)]
+      just_merged=TRUE
+    }
+    is_first = FALSE
+  }
+#  print(paste("Final count before merge: ", nrow(tdt)))
+  if((nrow(tdt)>0) && !just_merged)
+  {
+    if(n == 0)
+      tdt <- tdt[,.(count=sum(count)), by=.(nextword)]
+    else if(n == 1)
+      tdt <- tdt[,.(count=sum(count)), by=.(word1, nextword)]
+    else if(n == 2)
+      tdt <- tdt[,.(count=sum(count)), by=.(word2, word1, nextword)]
+    else if(n == 3)
+      tdt <- tdt[,.(count=sum(count)), by=.(word3, word2, word1, nextword)]
+    else if(n == 4)
+      tdt <- tdt[,.(count=sum(count)), by=.(word4, word3, word2, word1, nextword)]
+  }
+  return(tdt)
+}
+
+# Convenience function mergeWriteTdms loops through the list of n's for the N-Grams
+# and calls the merging function for the given file list and filter files that satisfy the
+# filename conventions and includes the name given in str. str is expected to
+# include only blogs, news, or twitter.
+
+mergeWriteTdms <- function(indir, outdir, fileList, str, n_list = c(1, 2, 3, 4))
+{
+  for(i in n_list)
+  {
+    fileList2 <- fileList[grepl(paste(str, "_[[:digit:]]+_tdm_", as.character(i-1), sep=""), fileList)]
+    tdt <- mergeTdms(indir, fileList2, i-1)
+    fwrite(tdt, paste(outdir, "en_US.", str, "_tdm_", as.character(i-1), ".csv", sep=""))
+  }
+}
+
+# mergeWriteAllTdms is a convenience function to help construct the overall Tdms.
+# The challenge is to keep the TDM's in memory, so this combines blogs, news and
+# twitter TDM's for the given n's one file at the time. Outdir is used for both
+# input and output files
+
+mergeWriteAllTdms <- function(outdir, n_list = c(1, 2, 3, 4))
+{
+  for(i in n_list)
+  {
+    fileList <- c(paste("en_US.blogs_tdm_", as.character(i-1), ".csv", sep=""),
+                  paste("en_US.news_tdm_", as.character(i-1), ".csv", sep=""),
+                  paste("en_US.twitter_tdm_", as.character(i-1), ".csv", sep=""))
+    tdt <- mergeTdms(outdir, fileList, i-1)
+    fwrite(tdt, paste(outdir, "en_US.all_tdm_", as.character(i-1), ".csv", sep=""))
+  }
+}
+
+indir <- "./tdm3/en_US/" # Reading from directory where we just wrote it
+outdir2 <- "./tdmall3/en_US/"
+
+fileList <- list.files(indir)
+
+fileList <- fileList[!grepl("_000010", fileList)] # Leaf the 10th chunks out for testing
+
+mergeWriteTdms(indir, outdir2, fileList, "blogs", c(1, 2, 3, 4, 5))
+mergeWriteTdms(indir, outdir2, fileList, "news", c(1, 2, 3, 4, 5))
+mergeWriteTdms(indir, outdir2, fileList, "twitter", c(1, 2, 3, 4, 5))
+
+mergeWriteAllTdms(outdir2, n_list=c(1, 2, 3, 4, 5))
+
+```
+
+## Probability calculation
+
+```{r}
+inputdir <- "./tdmall3/en_US/"
+
+readTdm <- function(dir, filenm)
+{
+  fnm <- paste(dir, filenm, sep="")
+  tdm <- fread(fnm)
+  return(tdm)
+}
+
+writeTdm <- function(tdm, dir, filenm)
+{
+  fnm <- paste(dir, filenm, sep="")
+  fwrite(tdm, fnm)
+}
+
+# Stupid backoff algorithm
+
+# Precalculate probabilities for each outcome
+
+# Adding scores - 2 files at the time; writing result to disc
+
+lbda=0.4
+
+tdt1all <- readTdm(inputdir, "en_US.all_tdm_0.csv")
+tdt2all <- readTdm(inputdir, "en_US.all_tdm_1.csv")
+colnames(tdt1all) <- c("word1", "count1") # Note; matching first word
+colnames(tdt2all) <- c("word1", "nextword", "count2")
+tdt2all <- merge(tdt2all, tdt1all, all.x=TRUE, by="word1")
+tdt2all <- tdt2all[!is.na(tdt2all$count1)]
+tdt2all <- tdt2all[,count1:=lbda*lbda*count2/count1]
+tdt2all <- tdt2all[,.(word1, nextword, count2, count1)] #Rearrange columns
+colnames(tdt2all) <- c("word1", "nextword", "count", "score")
+writeTdm(tdt2all, inputdir, "en_US.all_tdm_scores_1.csv")
+rm(tdt1all)
+tdt2all <- tdt2all[,1:3] #Remove score column to save space and not confuse following operations
+colnames(tdt2all) <- c("word2", "word1", "count2") # Rename columns for matching
+tdt3all <- readTdm(inputdir, "en_US.all_tdm_2.csv")
+colnames(tdt3all) <- c("word2", "word1", "nextword", "count3")
+tdt3all <- merge(tdt3all, tdt2all, all.x=TRUE, by=c("word2", "word1"))
+tdt3all <- tdt3all[!is.na(tdt3all$count2)]
+tdt3all <- tdt3all[,count2:=lbda*count3/count2]
+tdt3all <- tdt3all[,.(word2, word1, nextword, count3, count2)] #Rearrange columns
+colnames(tdt3all) <- c("word2", "word1", "nextword", "count", "score")
+writeTdm(tdt3all, inputdir, "en_US.all_tdm_scores_2.csv")
+rm(tdt2all)
+tdt3all <- tdt3all[,1:4] # Remove score column
+colnames(tdt3all) <- c("word3", "word2", "word1", "count3")
+tdt4all <- readTdm(inputdir, "en_US.all_tdm_3.csv")
+colnames(tdt4all) <- c("word3", "word2", "word1", "nextword", "count4")
+tdt4all <- merge(tdt4all, tdt3all, all.x=TRUE, by=c("word3", "word2", "word1"))
+tdt4all <- tdt4all[!is.na(tdt4all$count3)]
+tdt4all <- tdt4all[,count3:=count4/count3]
+tdt4all <- tdt4all[,.(word3, word2, word1, nextword, count4, count3)] #Rearrange columns
+colnames(tdt4all) <- c("word3", "word2", "word1", "nextword", "count", "score")
+writeTdm(tdt4all, inputdir, "en_US.all_tdm_scores_3.csv")
+rm(tdt3all)
+tdt4all <- tdt4all[,1:5] # Remove score column
+colnames(tdt4all) <- c("word4", "word3", "word2", "word1", "count4")
+tdt5all <- readTdm(inputdir, "en_US.all_tdm_4.csv")
+colnames(tdt5all) <- c("word4", "word3", "word2", "word1", "nextword", "count5")
+tdt5all <- merge(tdt5all, tdt4all, all.x=TRUE, by=c("word4", "word3", "word2", "word1"))
+tdt5all <- tdt5all[!is.na(tdt5all$count4)]
+tdt5all <- tdt5all[,count4:=count5/count4]
+tdt5all <- tdt5all[,.(word4, word3, word2, word1, nextword, count5, count4)] #Rearrange columns
+colnames(tdt5all) <- c("word4", "word3", "word2", "word1", "nextword", "count", "score")
+writeTdm(tdt5all, inputdir, "en_US.all_tdm_scores_4.csv")
+rm(tdt4all)
+rm(tdt5all)
+
+```
+
+
+
+# Purging alternatives with too low scores
+
+```{r}
+
+
+min2 = 0.01
+min3 = 0.01
+min4 = 0.01
+min5 = 0.01
+mincount2 = 2
+mincount3 = 2
+mincount4 = 2
+mincount5 = 2
+
+tdt2all <- readTdm(inputdir, "en_US.all_tdm_scores_1.csv")
+n2 <- nrow(tdt2all)
+tdt2all <- tdt2all[(score >= min2) & (count >= mincount2)]
+print(paste("tdt2all reduction", as.character(nrow(tdt2all)/n2)))
+writeTdm(tdt2all, inputdir, "en_US.all_tdm_scores_red_1.csv")
+rm(tdt2all)
+tdt3all <- readTdm(inputdir, "en_US.all_tdm_scores_2.csv")
+n3 <- nrow(tdt3all)
+tdt3all <- tdt3all[(score >= min3) & (count >= mincount3)]
+print(paste("tdt3all reduction", as.character(nrow(tdt3all)/n3)))
+writeTdm(tdt3all, inputdir, "en_US.all_tdm_scores_red_2.csv")
+rm(tdt3all)
+tdt4all <- readTdm(inputdir, "en_US.all_tdm_scores_3.csv")
+n4 <- nrow(tdt4all)
+tdt4all <- tdt4all[(score >= min4) & (count >= mincount4)]
+print(paste("tdt4all reduction", as.character(nrow(tdt4all)/n4)))
+writeTdm(tdt4all, inputdir, "en_US.all_tdm_scores_red_3.csv")
+rm(tdt4all)
+tdt5all <- readTdm(inputdir, "en_US.all_tdm_scores_4.csv")
+n5 <- nrow(tdt5all)
+tdt5all <- tdt5all[(score >= min5) & (count >= mincount5)]
+print(paste("tdt5all reduction", as.character(nrow(tdt5all)/n5)))
+writeTdm(tdt5all, inputdir, "en_US.all_tdm_scores_red_4.csv")
+rm(tdt5all)
+
+# Purging all alternatives except for top 3
+
+tdt2all <- readTdm(inputdir, "en_US.all_tdm_scores_red_1.csv")
+n2 <- nrow(tdt2all)
+tdt2all <- data.table(arrange(tdt2all, desc(score))) # Order by desc. score
+tdt2all <- tdt2all[,.SD[c(1,2,3)], by=.(word1)] # Take top 3
+tdt2all <- tdt2all[!is.na(score)]
+tdt2all <- tdt2all[,.(word1, nextword, count, score)] # reorder columns
+print(paste("tdt2all reduction", as.character(nrow(tdt2all)/n2)))
+writeTdm(tdt2all, inputdir, "en_US.all_tdm_scores_redalt_1.csv")
+rm(tdt2all)
+tdt3all <- readTdm(inputdir, "en_US.all_tdm_scores_red_2.csv")
+n3 <- nrow(tdt3all)
+tdt3all <- data.table(arrange(tdt3all, desc(score))) # Order by desc. score
+tdt3all <- tdt3all[,.SD[c(1,2,3)], by=.(word2, word1)] # Take top 3
+tdt3all <- tdt3all[!is.na(score)]
+tdt3all <- tdt3all[,.(word2, word1, nextword, count, score)] # reorder columns
+print(paste("tdt3all reduction", as.character(nrow(tdt3all)/n3)))
+writeTdm(tdt3all, inputdir, "en_US.all_tdm_scores_redalt_2.csv")
+rm(tdt3all)
+tdt4all <- readTdm(inputdir, "en_US.all_tdm_scores_red_3.csv")
+n4 <- nrow(tdt4all)
+tdt4all <- data.table(arrange(tdt4all, desc(score))) # Order by desc. score
+tdt4all <- tdt4all[,.SD[c(1,2,3)], by=.(word3, word2, word1)] # Take top 3
+tdt4all <- tdt4all[!is.na(score)]
+tdt4all <- tdt4all[,.(word3, word2, word1, nextword, count, score)] # reorder cols
+print(paste("tdt4all reduction", as.character(nrow(tdt4all)/n4)))
+writeTdm(tdt4all, inputdir, "en_US.all_tdm_scores_redalt_3.csv")
+rm(tdt4all)
+tdt5all <- readTdm(inputdir, "en_US.all_tdm_scores_red_4.csv")
+n5 <- nrow(tdt5all)
+tdt5all <- data.table(arrange(tdt5all, desc(score))) # Order by desc. score
+tdt5all <- tdt5all[,.SD[c(1,2,3)], by=.(word4, word3, word2, word1)] # Take top 3
+tdt5all <- tdt5all[!is.na(score)]
+tdt5all <- tdt5all[,.(word4, word3, word2, word1, nextword, count, score)] # reorder
+print(paste("tdt5all reduction", as.character(nrow(tdt5all)/n5)))
+writeTdm(tdt5all, inputdir, "en_US.all_tdm_scores_redalt_4.csv")
+rm(tdt5all)
+
+
+
+
+
+
+``` 
+
+## Quiz
+
+
