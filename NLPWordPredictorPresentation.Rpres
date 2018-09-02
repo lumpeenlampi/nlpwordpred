@@ -1,8 +1,13 @@
-NLPWordPredictorPresentation
+NLP Word Predictor Presentation
 ========================================================
 author: Lumpeenlampi
 date: 1.9.2018
-autosize: true
+autosize: false
+<style>
+.small-text {
+ font-size: 1em;
+}
+</style>
 
 Introduction
 ========================================================
@@ -20,24 +25,22 @@ NLPWordPredictor - an NGram based word predictor
 
 Building of the model
 ========================================================
+<small style="font-size:.7em">
 The model was built with a trainingset from Blogs, News and Twitter in english, size ~569 MB
-
-Preprocessing
-- Converting to lowercase, number and punctuation removal
-- Converting to ASCII and eliminating superfluous characters
-- Splitting into approx. 70 files to avoid memory problems
-- Setting aside chunks (~7%) from the three sources for testing
-
-NGram analysis
-- Generation of 1, 2, 3, 4 and 5-grams with tm package
-- Merging separate files into combined ngram lists with counts
-- Ngram lists built with n=1, except for 5-gram (n=2; memory limit)
-
-Classifier model building
-- Calculate score for each n-gram for use with Stupid Back-Off algorithm
-- Tools for purging Ngram lists by count, score, or top-3 options/n-gram
-- Classifier algorithm uses Stupid Back Off for matches
-
+* Preprocessing
+  + Converting to lowercase, number and punctuation removal
+  + Converting to ASCII and eliminating superfluous characters
+  + Splitting into approx. 70 files to avoid memory problems
+  + Setting aside chunks (~7%) from the three sources for testing
+* NGram analysis
+  + Generation of 1, 2, 3, 4 and 5-grams with tm package
+  + Merging separate files into combined ngram lists with counts
+  + Ngram lists built with n=1, except for 5-gram (n=2; memory limit)
+* Classifier model building
+  + Calculate score for each n-gram for use with Stupid Back-Off algorithm
+  + Tools for purging Ngram lists by count, score, or top-3 options/n-gram
+  + Classifier algorithm uses Stupid Back Off for matches
+</small>  
 
 Accuracy dependence for various tested models
 ========================================================
@@ -77,25 +80,21 @@ Note: The test includes models with different parameters
 
 Optimization of parameters
 ========================================================
-
-Test tool
-- Generates random input vector from test chunks
-- Runs predictor n (1000) times for each input (blogs, news, twitter)
+<small style="font-size:.7em">
+* Test tool
+  + Generates random input vector from test chunks
+  + Runs predictor n (1000) times for each input (blogs, news, twitter)
 and outputs performance indicators (accuracy, time, match position, etc)
-- Tests used to optimise parameters for model (count, score, top-3 ngrams)
-
-Final choice of the parameters for the web application:
-- General aim to minimize file size while keeping reasonable accuracy
-- n = 5 (2-gram), 4 (3-g), 3 (4-g) and 2 (5-g), 
-- minimum score =0.01
-- Only top 3 options for any ngram start were maintained
-
-Features of the algorithm
-- Model size: 158 MB
-- Accuracy: blogs: 17.7%, news: 21.3%, twitter:18.6%, total: 19.2%
-- Match in top 3: 27,6%, match in top 10: 29.1%
-- Response time: 21ms
-
+  + Tests used to optimise parameters for model (count, score, top-3 ngrams)
+* Final choice of the parameters for the web application:
+  + General aim to minimize file size while keeping reasonable accuracy  
+  + n = 5 (2-gram), 4 (3-g), 3 (4-g) and 2 (5-g), minimum score =0.01
+  + Only top 3 options for any ngram start were maintained
+* Features of the algorithm
+  + Model size: 158 MB, Response time: 21ms
+  + Accuracy: blogs: 17.7%, news: 21.3%, twitter:18.6%, total: 19.2%
+  + Match in top 3: 27,6%, match in top 10: 29.1%
+</small>
 ```{r, echo=FALSE}
 print(log[id=="final+alt" & ngrams==5])
 ```
@@ -103,12 +102,11 @@ print(log[id=="final+alt" & ngrams==5])
 
 Web application & further development
 ========================================================
-
-The NLP Word predictor was embedded in a web application and can be used online via the following link: <http://...>
-
-The application provides the possibility to evaluate operation when restricting the level of ngrams and shows the best 10 matches for the predicted word with score, and count (in the training set) as well as used n-gram. An example is shown below.
-
-The NLP word predictor can still be improved by e.g. avoiding training data to cross sentence punctuation and including separate models that take grammar and/or topical consistency into account.
-
+<small style="font-size:.7em">
+- The NLP Word predictor was embedded in a web application and can be used online via the following link: <https://lumpeenlampi.shinyapps.io/NLPWordPredictor/>
+- Enter a phrase and press the "Predict Next Word" button, scored words appear on the right
+- The application provides the possibility to restrict the level of ngrams and shows the best max. 10 matches for the predicted word with score, count (in the training set) and used n-gram in a list and word cloud. 
+- The NLP word predictor can be improved by e.g. avoiding training across sentences and including separate models for grammar and/or topical consistency.
+</small>
 ![Picture of the application](NLPWordPred.jpg)
 

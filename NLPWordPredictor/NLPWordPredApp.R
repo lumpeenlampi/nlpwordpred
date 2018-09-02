@@ -1,10 +1,8 @@
 #
-# This is a Shiny web application. You can run the application by clicking
-# the 'Run App' button above.
-#
-# Find out more about building applications with Shiny here:
-#
-#    http://shiny.rstudio.com/
+# This is the NLP Word Predictor Application developed by Lumpeenlampi for the
+# Coursera Capstone project. It deploys prediction based on 5-grams and includes
+# a model of approx 150 MB.
+# 
 #
 
 library(shiny)
@@ -21,7 +19,8 @@ library(wordcloud)
 
 options(shiny.maxRequestSize=300*1024^2)
 
-inputdir <- "../tdmall3/en_US/"
+#inputdir <- "../tdmall3/en_US/"
+inputdir <- ""
 
 readTdm <- function(dir, filenm)
 {
